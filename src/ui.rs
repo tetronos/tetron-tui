@@ -606,7 +606,7 @@ fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str) {
         lines.push(Line::raw(l.to_string()));
     }
     lines.push(Line::raw(""));
-    lines.push(Line::styled("scan the QR or copy the code · Esc to close", Style::new().fg(C_DIM)));
+    lines.push(Line::styled("y copy (OSC 52) · w save to file · Esc close", Style::new().fg(C_DIM)));
     f.render_widget(Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: false }), inner);
 }
 
