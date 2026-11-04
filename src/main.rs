@@ -5,6 +5,7 @@
 //! networks/peers/transport/history view. No actions change daemon state yet.
 
 mod action;
+mod invite_file;
 mod app;
 mod ipc_client;
 mod join_input;

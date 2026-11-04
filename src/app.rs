@@ -302,6 +302,8 @@ impl App {
                         self.copy_clipboard(&code);
                         self.set_toast("invite code copied", false);
                     }
+                } else if k.code == KeyCode::Char('w') {
+                    self.save_invite();
                 } else if matches!(k.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
                     self.mode = Mode::Normal;
                 }
@@ -601,6 +603,19 @@ impl App {
         }
         self.set_toast(format!("ssh {ip}…"), false);
         self.ssh_target = Some(ip);
+    }
+
+    /// Save the shown invite to $HOME for `tetron join --invite-file`
+    /// (TUI-INVITE-001).
+    fn save_invite(&mut self) {
+        let Mode::Invite { network, code, id, .. } = &self.mode else { return };
+        let Some(home) = std::env::var_os("HOME") else {
+            return self.set_toast("save invite: HOME is not set", true);
+        };
+        match crate::invite_file::save(std::path::Path::new(&home), network, id, code) {
+            Ok(p) => self.set_toast(format!("saved {}", p.display()), false),
+            Err(e) => self.set_toast(e, true),
+        }
     }
 
     /// Put `text` on the terminal's clipboard via OSC 52 (works over SSH when
