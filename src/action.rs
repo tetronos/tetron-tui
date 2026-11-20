@@ -37,6 +37,14 @@ pub enum Action {
     Nuke { network_key: String, second: Option<String> },
     /// Leave a network.
     Leave { network: String },
+    /// Share an invite on the LAN with the contrib script (TUI-SERVE-001).
+    Share {
+        script: std::path::PathBuf,
+        network: String,
+        code: String,
+        id: String,
+        stop: std::sync::Arc<tokio::sync::Notify>,
+    },
 }
 
 /// The outcome of an [`Action`], reported back to the UI.
@@ -50,12 +58,20 @@ pub enum ActionResult {
     Invite { network: String, code: String, id: String },
     /// The key-holders of a network (short_id, is_self), for the Admin tab.
     Admins { network: String, admins: Vec<(String, bool)> },
+    /// The LAN share started: the URL to tell the joiner (TUI-SERVE-001).
+    Sharing { id: String, url: String },
+    /// The LAN share ended; `failed` means it never printed a URL.
+    ShareEnded { id: String, reason: String, failed: bool },
 }
 
 /// Drain the action queue, running each on its own task.
 pub async fn run(mut rx: UnboundedReceiver<Action>, tx: UnboundedSender<ActionResult>) {
     while let Some(a) = rx.recv().await {
         let tx = tx.clone();
+        if let Action::Share { script, network, code, id, stop } = a {
+            tokio::spawn(crate::serve::run("python3", script, network, code, id, tx, stop));
+            continue;
+        }
         tokio::spawn(async move {
             let _ = tx.send(exec(a).await);
         });
@@ -155,6 +171,9 @@ async fn exec(a: Action) -> ActionResult {
             let verb = if second.is_some() { "seconded nuke" } else { "nuke requested" };
             simple(IpcMessage::Nuke { network_key, force: false, cancel: false, second }, verb).await
         }
+
+        // Started in `run`, never through `exec`.
+        Action::Share { .. } => ActionResult::Err("share: internal error".into()),
 
         Action::Leave { network } => {
             simple(IpcMessage::Leave { network, force: false }, "left network").await

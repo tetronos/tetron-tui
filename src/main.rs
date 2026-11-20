@@ -10,6 +10,7 @@ mod app;
 mod ipc_client;
 mod join_input;
 mod model;
+mod serve;
 mod ui;
 
 use anyhow::Result;
@@ -114,6 +115,7 @@ async fn run(terminal: &mut Term) -> Result<()> {
             terminal.clear()?;
         }
         if app.should_quit {
+            app.stop_share();
             break;
         }
         terminal.draw(|f| ui::draw(f, &mut app))?;

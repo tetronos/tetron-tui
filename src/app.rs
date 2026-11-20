@@ -14,7 +14,9 @@ use ratatui::layout::Rect;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Write;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Notify;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::{Action, ActionResult};
@@ -131,6 +133,15 @@ pub struct App {
     /// render pass can keep the selected peer in view each frame.
     pub peer_scroll: Cell<usize>,
     action_tx: UnboundedSender<Action>,
+    /// The LAN share of the shown invite (TUI-SERVE-001): invite id, stop
+    /// signal, and the URL with its QR once the script printed it.
+    pub share: Option<Share>,
+}
+
+pub struct Share {
+    pub id: String,
+    stop: Arc<Notify>,
+    pub url: Option<(String, String)>,
 }
 
 impl App {
@@ -154,6 +165,7 @@ impl App {
             ssh_target: None,
             peer_scroll: Cell::new(0),
             action_tx,
+            share: None,
         }
     }
 
@@ -202,12 +214,26 @@ impl App {
             ActionResult::Ok(m) => self.set_toast(m, false),
             ActionResult::Err(m) => self.set_toast(m, true),
             ActionResult::Invite { network, code, id } => {
+                self.stop_share();
                 let qr = build_qr(&code);
                 self.mode = Mode::Invite { network, code, id, qr };
             }
             ActionResult::Admins { network, admins } => {
                 self.admins = Some((network, admins));
             }
+            ActionResult::Sharing { id, url } if self.is_sharing(&id) => {
+                let qr = build_qr(&url);
+                if let Some(sh) = &mut self.share {
+                    sh.url = Some((url, qr));
+                }
+                self.set_toast("sharing the invite on the LAN", false);
+            }
+            ActionResult::ShareEnded { id, reason, failed } if self.is_sharing(&id) => {
+                self.share = None;
+                self.set_toast(reason, failed);
+            }
+            // A late report from a share the user already stopped.
+            ActionResult::Sharing { .. } | ActionResult::ShareEnded { .. } => {}
         }
     }
 
@@ -244,7 +270,10 @@ impl App {
                 }
                 match self.mode {
                     // A click dismisses the invite card; other modals need keys.
-                    Mode::Invite { .. } => self.mode = Mode::Normal,
+                    Mode::Invite { .. } => {
+                        self.stop_share();
+                        self.mode = Mode::Normal;
+                    }
                     Mode::Normal => self.on_click(m.column, m.row),
                     _ => {}
                 }
@@ -304,7 +333,10 @@ impl App {
                     }
                 } else if k.code == KeyCode::Char('w') {
                     self.save_invite();
+                } else if k.code == KeyCode::Char('s') {
+                    self.share_invite();
                 } else if matches!(k.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
+                    self.stop_share();
                     self.mode = Mode::Normal;
                 }
                 return;
@@ -603,6 +635,41 @@ impl App {
         }
         self.set_toast(format!("ssh {ip}…"), false);
         self.ssh_target = Some(ip);
+    }
+
+    /// Share the shown invite on the LAN with the contrib script
+    /// (TUI-SERVE-001).
+    fn share_invite(&mut self) {
+        if self.share.is_some() {
+            return self.set_toast("already sharing this invite", false);
+        }
+        let Mode::Invite { network, code, id, .. } = &self.mode else { return };
+        let script = match crate::serve::find_script() {
+            Ok(p) => p,
+            Err(e) => return self.set_toast(e, true),
+        };
+        let stop = Arc::new(Notify::new());
+        let a = Action::Share {
+            script,
+            network: network.clone(),
+            code: code.clone(),
+            id: id.clone(),
+            stop: stop.clone(),
+        };
+        self.share = Some(Share { id: id.clone(), stop, url: None });
+        self.act(a);
+        self.set_toast("starting LAN share…", false);
+    }
+
+    fn is_sharing(&self, id: &str) -> bool {
+        self.share.as_ref().is_some_and(|s| s.id == id)
+    }
+
+    /// Stop the LAN share, if any, and kill the script now.
+    pub fn stop_share(&mut self) {
+        if let Some(sh) = self.share.take() {
+            sh.stop.notify_one();
+        }
     }
 
     /// Save the shown invite to $HOME for `tetron join --invite-file`

@@ -44,7 +44,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     match &app.mode {
         Mode::Input { kind, buf } => draw_input(f, *kind, buf),
-        Mode::Invite { network, code, id, qr } => draw_invite(f, network, code, id, qr),
+        Mode::Invite { network, code, id, qr } => {
+            draw_invite(f, network, code, id, qr, app.share.as_ref().and_then(|s| s.url.as_ref()))
+        }
         Mode::Confirm { prompt, .. } => draw_confirm(f, prompt),
         Mode::Normal => {
             if app.show_help {
@@ -577,7 +579,9 @@ fn draw_input(f: &mut Frame, kind: InputKind, buf: &str) {
     f.set_cursor_position((cx.min(rows[0].x + rows[0].width.saturating_sub(1)), rows[0].y));
 }
 
-fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str) {
+fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str, share: Option<&(String, String)>) {
+    // While sharing on the LAN the URL and its QR replace the invite (TUI-SERVE-001).
+    let qr = share.map_or(qr, |(_, q)| q.as_str());
     let qr_w = qr.lines().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
     let qr_h = qr.lines().count() as u16;
     let w = qr_w.max(44).min(f.area().width.saturating_sub(2)) + 4;
@@ -591,11 +595,18 @@ fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let mut lines = vec![
-        Line::from(vec![
+    let first = match share {
+        Some((url, _)) => Line::from(vec![
+            Span::styled("url   ", Style::new().fg(C_DIM)),
+            Span::styled(url.clone(), Style::new().fg(C_OK).bold()),
+        ]),
+        None => Line::from(vec![
             Span::styled("code  ", Style::new().fg(C_DIM)),
             Span::styled(code.to_string(), Style::new().fg(C_OK).bold()),
         ]),
+    };
+    let mut lines = vec![
+        first,
         Line::from(vec![
             Span::styled("id    ", Style::new().fg(C_DIM)),
             Span::raw(id.to_string()),
@@ -606,7 +617,12 @@ fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str) {
         lines.push(Line::raw(l.to_string()));
     }
     lines.push(Line::raw(""));
-    lines.push(Line::styled("y copy (OSC 52) · w save to file · Esc close", Style::new().fg(C_DIM)));
+    let hint = if share.is_some() {
+        "sharing on the LAN, Esc stops"
+    } else {
+        "y copy (OSC 52) · w save · s share on LAN · Esc close"
+    };
+    lines.push(Line::styled(hint, Style::new().fg(C_DIM)));
     f.render_widget(Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: false }), inner);
 }
 
