@@ -36,6 +36,17 @@ pub struct Hits {
     pub peers: Vec<(Rect, usize)>,
     /// Footer toolbar buttons and the action each triggers.
     pub buttons: Vec<(Rect, Btn)>,
+    /// Buttons on the invite overlay (TUI-SERVE-001).
+    pub invite_btns: Vec<(Rect, InviteBtn)>,
+}
+
+/// A button on the invite overlay. Clicking it does the same as its key.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum InviteBtn {
+    Copy,
+    Save,
+    Share,
+    Close,
 }
 
 /// A footer toolbar button. Clicking it does the same as its hotkey.
@@ -269,10 +280,16 @@ impl App {
                     return;
                 }
                 match self.mode {
-                    // A click dismisses the invite card; other modals need keys.
+                    // A click on a card button acts; any other click dismisses
+                    // the card. Other modals need keys.
                     Mode::Invite { .. } => {
-                        self.stop_share();
-                        self.mode = Mode::Normal;
+                        let b = self
+                            .hits
+                            .invite_btns
+                            .iter()
+                            .find(|(r, _)| hit(r, m.column, m.row))
+                            .map(|(_, b)| *b);
+                        self.invite_button(b.unwrap_or(InviteBtn::Close));
                     }
                     Mode::Normal => self.on_click(m.column, m.row),
                     _ => {}
@@ -325,19 +342,12 @@ impl App {
         match self.mode {
             Mode::Input { .. } => return self.input_key(k),
             Mode::Invite { .. } => {
-                if matches!(k.code, KeyCode::Char('y') | KeyCode::Char('c')) {
-                    if let Mode::Invite { code, .. } = &self.mode {
-                        let code = code.clone();
-                        self.copy_clipboard(&code);
-                        self.set_toast("invite code copied", false);
-                    }
-                } else if k.code == KeyCode::Char('w') {
-                    self.save_invite();
-                } else if k.code == KeyCode::Char('s') {
-                    self.share_invite();
-                } else if matches!(k.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
-                    self.stop_share();
-                    self.mode = Mode::Normal;
+                match k.code {
+                    KeyCode::Char('y') | KeyCode::Char('c') => self.invite_button(InviteBtn::Copy),
+                    KeyCode::Char('w') => self.invite_button(InviteBtn::Save),
+                    KeyCode::Char('s') => self.invite_button(InviteBtn::Share),
+                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.invite_button(InviteBtn::Close),
+                    _ => {}
                 }
                 return;
             }
@@ -637,11 +647,32 @@ impl App {
         self.ssh_target = Some(ip);
     }
 
+    /// An invite overlay action, from its key or its button.
+    fn invite_button(&mut self, b: InviteBtn) {
+        match b {
+            InviteBtn::Copy => {
+                if let Mode::Invite { code, .. } = &self.mode {
+                    let code = code.clone();
+                    self.copy_clipboard(&code);
+                    self.set_toast("invite code copied", false);
+                }
+            }
+            InviteBtn::Save => self.save_invite(),
+            InviteBtn::Share => self.share_invite(),
+            InviteBtn::Close => {
+                self.stop_share();
+                self.mode = Mode::Normal;
+            }
+        }
+    }
+
     /// Share the shown invite on the LAN with the contrib script
     /// (TUI-SERVE-001).
     fn share_invite(&mut self) {
+        // The button and `s` toggle: a second press stops sharing.
         if self.share.is_some() {
-            return self.set_toast("already sharing this invite", false);
+            self.stop_share();
+            return self.set_toast("stopped sharing", false);
         }
         let Mode::Invite { network, code, id, .. } = &self.mode else { return };
         let script = match crate::serve::find_script() {
