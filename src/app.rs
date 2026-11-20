@@ -38,6 +38,8 @@ pub struct Hits {
     pub buttons: Vec<(Rect, Btn)>,
     /// Buttons on the invite overlay (TUI-SERVE-001).
     pub invite_btns: Vec<(Rect, InviteBtn)>,
+    /// Rows of the network picker, indexed by network position.
+    pub pick_rows: Vec<Rect>,
 }
 
 /// A button on the invite overlay. Clicking it does the same as its key.
@@ -103,6 +105,8 @@ pub enum Mode {
     Normal,
     Input { kind: InputKind, buf: String },
     Invite { network: String, code: String, id: String, qr: String },
+    /// Choose which network to mint the invite for (TUI-INVITE-002).
+    PickNet { sel: usize },
     /// A yes/no gate before firing a (possibly destructive) action.
     Confirm { prompt: String, action: Action },
 }
@@ -291,6 +295,12 @@ impl App {
                             .map(|(_, b)| *b);
                         self.invite_button(b.unwrap_or(InviteBtn::Close));
                     }
+                    Mode::PickNet { .. } => {
+                        match self.hits.pick_rows.iter().position(|r| hit(r, m.column, m.row)) {
+                            Some(i) => self.pick_net(i),
+                            None => self.mode = Mode::Normal,
+                        }
+                    }
                     Mode::Normal => self.on_click(m.column, m.row),
                     _ => {}
                 }
@@ -347,6 +357,25 @@ impl App {
                     KeyCode::Char('w') => self.invite_button(InviteBtn::Save),
                     KeyCode::Char('s') => self.invite_button(InviteBtn::Share),
                     KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.invite_button(InviteBtn::Close),
+                    _ => {}
+                }
+                return;
+            }
+            Mode::PickNet { .. } => {
+                let n = self.net_count();
+                let Mode::PickNet { sel } = &mut self.mode else { return };
+                match k.code {
+                    KeyCode::Up | KeyCode::Char('k') => *sel = sel.saturating_sub(1),
+                    KeyCode::Down | KeyCode::Char('j') => *sel = (*sel + 1).min(n.saturating_sub(1)),
+                    KeyCode::Char(c @ '1'..='9') if (c as usize - '1' as usize) < n => {
+                        let i = c as usize - '1' as usize;
+                        self.pick_net(i);
+                    }
+                    KeyCode::Enter => {
+                        let i = *sel;
+                        self.pick_net(i);
+                    }
+                    KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
                     _ => {}
                 }
                 return;
@@ -577,9 +606,22 @@ impl App {
         let _ = self.action_tx.send(a);
     }
 
-    /// Request an invite for the selected network.
+    /// Start an invite: with several networks, ask which one first
+    /// (TUI-INVITE-002); with one, mint it directly.
     fn invite_sel(&mut self) {
-        if let Some(name) = self.cur_net().map(|n| n.name.clone()) {
+        match self.net_count() {
+            0 => {}
+            1 => self.pick_net(0),
+            _ => self.mode = Mode::PickNet { sel: self.sel_net.min(self.net_count() - 1) },
+        }
+    }
+
+    /// Mint an invite for network number `i`, and make it the selected one.
+    fn pick_net(&mut self, i: usize) {
+        let name = self.snapshot.as_ref().and_then(|s| s.networks.get(i)).map(|n| n.name.clone());
+        if let Some(name) = name {
+            self.sel_net = i;
+            self.mode = Mode::Normal;
             self.act(Action::InviteCreate { network: name });
             self.set_toast("requesting invite…", false);
         }

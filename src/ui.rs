@@ -47,6 +47,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Invite { network, code, id, qr } => {
             draw_invite(f, network, code, id, qr, app.share.as_ref(), &mut hits)
         }
+        Mode::PickNet { sel } => draw_pick_net(f, app, *sel, &mut hits),
         Mode::Confirm { prompt, .. } => draw_confirm(f, prompt),
         Mode::Normal => {
             if app.show_help {
@@ -530,7 +531,7 @@ fn draw_help(f: &mut Frame) {
         Line::raw(""),
         key("c / d", "connect / standby selected network"),
         key("C / D", "connect / standby ALL networks"),
-        key("i", "create invite (code + QR; y copy, w save, s share on LAN)"),
+        key("i", "create invite (asks which network if several; y copy, w save, s share on LAN)"),
         key("n", "new network      J  join by invite, file or URL"),
         key("S", "stop daemon  ·  s: start (when down)"),
         Line::raw(""),
@@ -648,6 +649,38 @@ fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str, sha
     };
     f.render_widget(
         Paragraph::new(Line::styled(note, Style::new().fg(C_DIM))).alignment(Alignment::Center),
+        Rect { x: inner.x, y: inner.y + inner.height.saturating_sub(1), width: inner.width, height: 1 },
+    );
+}
+
+/// Network picker for a new invite (TUI-INVITE-002): a number, a click or
+/// Enter on the highlighted row mints.
+fn draw_pick_net(f: &mut Frame, app: &App, sel: usize, hits: &mut Hits) {
+    let nets = app.snapshot.as_ref().map_or(&[][..], |s| &s.networks[..]);
+    let w = 60u16.min(f.area().width.saturating_sub(2));
+    let h = nets.len() as u16 + 4;
+    let area = centered(f.area(), w, h);
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Invite for which network? ")
+        .title_style(Style::new().fg(C_ACCENT).bold());
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    hits.pick_rows.clear();
+    for (i, n) in nets.iter().enumerate() {
+        let rect = Rect { x: inner.x, y: inner.y + i as u16, width: inner.width, height: 1 };
+        if rect.y >= inner.y + inner.height.saturating_sub(1) {
+            break;
+        }
+        hits.pick_rows.push(rect);
+        let style = if i == sel { Style::new().fg(Color::Black).bg(C_ACCENT).bold() } else { Style::new() };
+        let label = format!(" {} {}  ({}, {})", i + 1, n.name, n.role, n.subnet);
+        f.render_widget(Paragraph::new(Span::styled(label, style)), rect);
+    }
+    f.render_widget(
+        Paragraph::new(Line::styled("number, click or Enter picks · ↑↓ move · Esc cancel", Style::new().fg(C_DIM)))
+            .alignment(Alignment::Center),
         Rect { x: inner.x, y: inner.y + inner.height.saturating_sub(1), width: inner.width, height: 1 },
     );
 }
@@ -909,6 +942,28 @@ mod invite_tests {
         }
         let kinds: Vec<_> = app.hits.invite_btns.iter().map(|(_, b)| *b).collect();
         assert!(kinds == [InviteBtn::Copy, InviteBtn::Save, InviteBtn::Share, InviteBtn::Close]);
+    }
+
+    #[test]
+    fn network_picker_lists_networks_and_picks_by_number() {
+        use crate::model::{NetSnap, Snapshot};
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(tx);
+        let mk = |n: &str| NetSnap { name: n.into(), role: "admin".into(), subnet: "10.0.0.0/24".into(), ..Default::default() };
+        app.snapshot = Some(Snapshot { networks: vec![mk("alpha"), mk("beta")], ..Default::default() });
+        app.mode = Mode::PickNet { sel: 0 };
+        let s = screen(&mut app);
+        assert!(s.contains("Invite for which network?") && s.contains("1 alpha") && s.contains("2 beta"));
+        assert_eq!(app.hits.pick_rows.len(), 2);
+        app.on_event(crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('2'),
+            crossterm::event::KeyModifiers::NONE,
+        )));
+        match rx.try_recv() {
+            Ok(crate::action::Action::InviteCreate { network }) => assert_eq!(network, "beta"),
+            _ => panic!("expected InviteCreate for beta"),
+        }
+        assert_eq!(app.sel_net, 1);
         // every button rect lies on a row that shows its label
         let rows: Vec<&str> = s.lines().collect();
         for (r, _) in &app.hits.invite_btns {

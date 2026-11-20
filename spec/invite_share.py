@@ -19,6 +19,20 @@ class InviteSave(Req):
     """
 
 
+class InvitePickNetwork(Req):
+    """REQUIREMENT-ID: TUI-INVITE-002
+
+    `i` and the `invite` toolbar button mint an invite for a network chosen
+    by the user (USER 2026-11-19). With one network the invite is minted
+    directly. With several, a picker "Invite for which network?" opens first,
+    listing each network (number, name, role, subnet) with the selected one
+    highlighted as the default. A number key, Enter on the highlighted row
+    or a click on a row picks it, makes it the selected network and mints the
+    invite; Up/Down (or k/j) move; Esc, q or a click outside cancels without
+    minting anything. The invite overlay title names the network.
+    """
+
+
 class InviteShare(Req):
     """REQUIREMENT-ID: TUI-SERVE-001
 

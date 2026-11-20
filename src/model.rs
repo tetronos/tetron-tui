@@ -23,6 +23,7 @@ pub struct Snapshot {
 }
 
 #[derive(Clone)]
+#[cfg_attr(test, derive(Default))]
 pub struct NetSnap {
     pub name: String,
     pub role: String,
