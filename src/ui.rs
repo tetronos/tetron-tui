@@ -990,6 +990,30 @@ mod invite_tests {
     }
 
     #[test]
+    fn every_invite_button_reacts_to_a_click() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(tx);
+        let open = |app: &mut App| {
+            app.mode = Mode::Invite { network: "n".into(), code: "CODE".into(), id: "i".into(), qr: "##\n##".into() };
+            screen(app);
+        };
+        // Save: no HOME file is written in a test, so check the toast changes.
+        open(&mut app);
+        let r = app.hits.invite_btns.iter().find(|(_, b)| *b == InviteBtn::Select).unwrap().0;
+        assert!(app.mouse_on);
+        click(&mut app, r.x + r.width / 2, r.y);
+        assert!(!app.mouse_on, "Select button did nothing");
+        open(&mut app);
+        let r = app.hits.invite_btns.iter().find(|(_, b)| *b == InviteBtn::Copy).unwrap().0;
+        click(&mut app, r.x + 1, r.y);
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("copied")), "Copy button did nothing");
+        assert!(matches!(app.mode, Mode::Invite { .. }));
+        let r = app.hits.invite_btns.iter().find(|(_, b)| *b == InviteBtn::Close).unwrap().0;
+        click(&mut app, r.x + r.width - 1, r.y);
+        assert!(matches!(app.mode, Mode::Normal), "Close button did nothing");
+    }
+
+    #[test]
     fn small_window_scrolls_to_the_last_qr_row() {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(tx);
@@ -1018,7 +1042,6 @@ mod invite_tests {
         assert!(s.contains("copy") || s.contains(" y "), "buttons scrolled away");
     }
 
-    #[test]
     #[test]
     fn network_picker_lists_networks_and_picks_by_number() {
         use crate::model::{NetSnap, Snapshot};
