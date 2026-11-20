@@ -14,14 +14,19 @@ class InviteSave(Req):
     `w` on the invite overlay saves the invite to
     $HOME/tetron-invite-<network>-<id>.txt, mode 0600, never overwriting an
     existing file, for `tetron join --invite-file`. The overlay lists its keys
-    (y copy, w save, s share, Esc close).
+    (y copy, w save, s share, Esc close), and shows them as clickable
+    buttons (TUI-SERVE-001); a click anywhere else on the card closes it.
     """
 
 
 class InviteShare(Req):
     """REQUIREMENT-ID: TUI-SERVE-001
 
-    `s` on the invite overlay shares the shown invite over HTTP on the LAN:
+    The invite overlay has a row of clickable buttons, each showing its key:
+    `y copy`, `w save`, `s share on LAN` (`s stop sharing` while sharing) and
+    `Esc close`, with the line "buttons or keys: ..." under them. A button
+    does the same as its key. `s` (or its button) shares the shown invite
+    over HTTP on the LAN:
 
     - the TUI runs `python3 -I SCRIPT NETWORK --invite-stdin` as a hidden
       child process (no new window, no terminal), writes the invite and a
@@ -40,7 +45,7 @@ class InviteShare(Req):
       toast names the reason: exit 3 "too many wrong requests", any other
       "stopped". The script itself ends after 5 wrong paths or 1 hour idle;
     - Esc or q (closing the overlay), minting another invite and quitting the
-      TUI kill the child. `s` while sharing is a no-op toast;
+      TUI kill the child. `s` or its button while sharing stops it;
     - the child is killed when the TUI exits for any reason (kill on drop).
     """
 

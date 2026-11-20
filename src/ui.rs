@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Sparkline, T
 use std::time::{SystemTime, UNIX_EPOCH};
 use tetron_proto::ipc::{ConnType, ViaDetail};
 
-use crate::app::{App, Btn, Hits, InputKind, Mode, Tab};
+use crate::app::{App, Btn, Hits, InviteBtn, InputKind, Mode, Tab};
 use crate::model::{NetSnap, PeerSnap};
 
 const C_DIM: Color = Color::DarkGray;
@@ -45,7 +45,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match &app.mode {
         Mode::Input { kind, buf } => draw_input(f, *kind, buf),
         Mode::Invite { network, code, id, qr } => {
-            draw_invite(f, network, code, id, qr, app.share.as_ref().and_then(|s| s.url.as_ref()))
+            draw_invite(f, network, code, id, qr, app.share.as_ref(), &mut hits)
         }
         Mode::Confirm { prompt, .. } => draw_confirm(f, prompt),
         Mode::Normal => {
@@ -530,7 +530,7 @@ fn draw_help(f: &mut Frame) {
         Line::raw(""),
         key("c / d", "connect / standby selected network"),
         key("C / D", "connect / standby ALL networks"),
-        key("i", "create invite (shows code + QR, y copies)"),
+        key("i", "create invite (code + QR; y copy, w save, s share on LAN)"),
         key("n", "new network      J  join by invite, file or URL"),
         key("S", "stop daemon  ·  s: start (when down)"),
         Line::raw(""),
@@ -579,13 +579,14 @@ fn draw_input(f: &mut Frame, kind: InputKind, buf: &str) {
     f.set_cursor_position((cx.min(rows[0].x + rows[0].width.saturating_sub(1)), rows[0].y));
 }
 
-fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str, share: Option<&(String, String)>) {
+fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str, sharing: Option<&crate::app::Share>, hits: &mut Hits) {
     // While sharing on the LAN the URL and its QR replace the invite (TUI-SERVE-001).
+    let share = sharing.and_then(|s| s.url.as_ref());
     let qr = share.map_or(qr, |(_, q)| q.as_str());
     let qr_w = qr.lines().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
     let qr_h = qr.lines().count() as u16;
     let w = qr_w.max(44).min(f.area().width.saturating_sub(2)) + 4;
-    let h = qr_h + 7;
+    let h = qr_h + 9;
     let area = centered(f.area(), w, h);
     f.render_widget(Clear, area);
     let block = Block::default()
@@ -617,13 +618,38 @@ fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str, sha
         lines.push(Line::raw(l.to_string()));
     }
     lines.push(Line::raw(""));
-    let hint = if share.is_some() {
-        "sharing on the LAN, Esc stops"
-    } else {
-        "y copy (OSC 52) · w save · s share on LAN · Esc close"
-    };
-    lines.push(Line::styled(hint, Style::new().fg(C_DIM)));
     f.render_widget(Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: false }), inner);
+    // Button row: key letter and action, clickable (TUI-SERVE-001).
+    let share_label = if sharing.is_some() { "stop sharing" } else { "share on LAN" };
+    let btns: [(&str, &str, InviteBtn, Color); 4] = [
+        ("y", "copy", InviteBtn::Copy, C_ACCENT),
+        ("w", "save", InviteBtn::Save, C_ACCENT),
+        ("s", share_label, InviteBtn::Share, C_OK),
+        ("Esc", "close", InviteBtn::Close, C_DIM),
+    ];
+    let widths: Vec<u16> = btns.iter().map(|(k, l, _, _)| (k.len() + l.len() + 3) as u16).collect();
+    let total: u16 = widths.iter().sum::<u16>() + (btns.len() as u16 - 1);
+    let row_y = inner.y + inner.height.saturating_sub(2);
+    let mut x = inner.x + inner.width.saturating_sub(total) / 2;
+    hits.invite_btns.clear();
+    for ((k, l, b, col), w) in btns.iter().zip(widths) {
+        let rect = Rect { x, y: row_y, width: w.min(inner.right().saturating_sub(x)), height: 1 };
+        hits.invite_btns.push((rect, *b));
+        f.render_widget(
+            Paragraph::new(Span::styled(format!(" {k} {l} "), Style::new().fg(Color::Black).bg(*col).bold())),
+            rect,
+        );
+        x += w + 1;
+    }
+    let note = if sharing.is_some() {
+        "sharing on the LAN: tell the joiner the url, Esc stops"
+    } else {
+        "buttons or keys: y copy · w save to file · s share on LAN"
+    };
+    f.render_widget(
+        Paragraph::new(Line::styled(note, Style::new().fg(C_DIM))).alignment(Alignment::Center),
+        Rect { x: inner.x, y: inner.y + inner.height.saturating_sub(1), width: inner.width, height: 1 },
+    );
 }
 
 fn draw_confirm(f: &mut Frame, prompt: &str) {
@@ -854,4 +880,39 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let x = area.x + (area.width - w) / 2;
     let y = area.y + (area.height - h) / 2;
     Rect { x, y, width: w, height: h }
+}
+
+#[cfg(test)]
+mod invite_tests {
+    use super::*;
+    use crate::app::{App, InviteBtn, Mode};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn screen(app: &mut App) -> String {
+        let mut t = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        t.draw(|f| draw(f, app)).unwrap();
+        let b = t.backend().buffer().clone();
+        (0..b.area.height)
+            .map(|y| (0..b.area.width).map(|x| b[(x, y)].symbol().to_string()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn invite_overlay_has_buttons_with_key_hints_and_click_rects() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(tx);
+        app.mode = Mode::Invite { network: "n".into(), code: "CODE".into(), id: "i".into(), qr: "##\n##".into() };
+        let s = screen(&mut app);
+        for want in ["y copy", "w save", "s share on LAN", "Esc close"] {
+            assert!(s.contains(want), "missing {want}");
+        }
+        let kinds: Vec<_> = app.hits.invite_btns.iter().map(|(_, b)| *b).collect();
+        assert!(kinds == [InviteBtn::Copy, InviteBtn::Save, InviteBtn::Share, InviteBtn::Close]);
+        // every button rect lies on a row that shows its label
+        let rows: Vec<&str> = s.lines().collect();
+        for (r, _) in &app.hits.invite_btns {
+            assert!(rows[r.y as usize].contains("copy") || rows[r.y as usize].contains("close"));
+        }
+    }
 }
