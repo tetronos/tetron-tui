@@ -19,6 +19,32 @@ class InviteSave(Req):
     """
 
 
+class InviteCardKeepsOpen(Req):
+    """REQUIREMENT-ID: TUI-INVITE-003
+
+    Bug fix, priority (USER 2026-11-19). The invite card is a window the
+    user must be able to read, copy from and scroll:
+
+    - a click on the card itself does nothing; the card used to vanish, so
+      the invite was lost. It closes only by Esc, Enter, q, the `Esc close`
+      button, or a click outside the card;
+    - copy (`y`, `c`, the `y copy` button) sends the invite to the terminal
+      clipboard with OSC 52 and also to the first installed system tool of
+      wl-copy, xclip, xsel; the toast names what was used and says that
+      `m` then a drag selects text by hand when nothing pastes;
+    - `m` (button `m select text`, `m mouse on` while off) toggles mouse
+      capture so the terminal can select the code text natively;
+    - the card is at least 66 columns wide when the window allows, so all
+      buttons show their labels; when it does not fit, buttons show only
+      their keys;
+    - when the window is too small for the whole card, the content (code,
+      id, QR) scrolls above two fixed rows (buttons and a hint) with Up,
+      Down, j, k, PageUp, PageDown, Home or the mouse wheel, and the hint
+      says so; the QR can always be reached in full. The scroll position
+      resets when a new invite opens.
+    """
+
+
 class InvitePickNetwork(Req):
     """REQUIREMENT-ID: TUI-INVITE-002
 

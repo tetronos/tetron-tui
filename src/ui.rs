@@ -45,7 +45,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match &app.mode {
         Mode::Input { kind, buf } => draw_input(f, *kind, buf),
         Mode::Invite { network, code, id, qr } => {
-            draw_invite(f, network, code, id, qr, app.share.as_ref(), &mut hits)
+            draw_invite(f, network, code, id, qr, app, &mut hits)
         }
         Mode::PickNet { sel } => draw_pick_net(f, app, *sel, &mut hits),
         Mode::Confirm { prompt, .. } => draw_confirm(f, prompt),
@@ -580,15 +580,17 @@ fn draw_input(f: &mut Frame, kind: InputKind, buf: &str) {
     f.set_cursor_position((cx.min(rows[0].x + rows[0].width.saturating_sub(1)), rows[0].y));
 }
 
-fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str, sharing: Option<&crate::app::Share>, hits: &mut Hits) {
+fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str, app: &App, hits: &mut Hits) {
+    let sharing = app.share.as_ref();
     // While sharing on the LAN the URL and its QR replace the invite (TUI-SERVE-001).
     let share = sharing.and_then(|s| s.url.as_ref());
     let qr = share.map_or(qr, |(_, q)| q.as_str());
     let qr_w = qr.lines().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
     let qr_h = qr.lines().count() as u16;
-    let w = qr_w.max(44).min(f.area().width.saturating_sub(2)) + 4;
-    let h = qr_h + 9;
+    let w = (qr_w.max(66) + 4).min(f.area().width);
+    let h = (qr_h + 9).min(f.area().height);
     let area = centered(f.area(), w, h);
+    hits.invite_card = Some(area);
     f.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -619,16 +621,34 @@ fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str, sha
         lines.push(Line::raw(l.to_string()));
     }
     lines.push(Line::raw(""));
-    f.render_widget(Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: false }), inner);
+    // The content scrolls above two fixed rows (buttons, note), so a small
+    // window still reaches the whole QR (TUI-INVITE-003).
+    let content = Rect { height: inner.height.saturating_sub(2), ..inner };
+    let wrapped: u16 = lines
+        .iter()
+        .map(|l| (l.width() as u16).max(1).div_ceil(inner.width.max(1)))
+        .sum();
+    let max = wrapped.saturating_sub(content.height);
+    app.invite_scroll_max.set(max);
+    let scroll = app.invite_scroll.get().min(max);
+    app.invite_scroll.set(scroll);
+    f.render_widget(
+        Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: false }).scroll((scroll, 0)),
+        content,
+    );
     // Button row: key letter and action, clickable (TUI-SERVE-001).
     let share_label = if sharing.is_some() { "stop sharing" } else { "share on LAN" };
-    let btns: [(&str, &str, InviteBtn, Color); 4] = [
+    let btns: [(&str, &str, InviteBtn, Color); 5] = [
         ("y", "copy", InviteBtn::Copy, C_ACCENT),
         ("w", "save", InviteBtn::Save, C_ACCENT),
         ("s", share_label, InviteBtn::Share, C_OK),
+        ("m", if app.mouse_on { "select text" } else { "mouse on" }, InviteBtn::Select, C_ACCENT),
         ("Esc", "close", InviteBtn::Close, C_DIM),
     ];
-    let widths: Vec<u16> = btns.iter().map(|(k, l, _, _)| (k.len() + l.len() + 3) as u16).collect();
+    let full: u16 = btns.iter().map(|(k, l, _, _)| (k.len() + l.len() + 3) as u16).sum::<u16>() + btns.len() as u16 - 1;
+    let compact = full > inner.width;
+    let label = |k: &str, l: &str| if compact { format!(" {k} ") } else { format!(" {k} {l} ") };
+    let widths: Vec<u16> = btns.iter().map(|(k, l, _, _)| label(k, l).chars().count() as u16).collect();
     let total: u16 = widths.iter().sum::<u16>() + (btns.len() as u16 - 1);
     let row_y = inner.y + inner.height.saturating_sub(2);
     let mut x = inner.x + inner.width.saturating_sub(total) / 2;
@@ -637,13 +657,15 @@ fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str, sha
         let rect = Rect { x, y: row_y, width: w.min(inner.right().saturating_sub(x)), height: 1 };
         hits.invite_btns.push((rect, *b));
         f.render_widget(
-            Paragraph::new(Span::styled(format!(" {k} {l} "), Style::new().fg(Color::Black).bg(*col).bold())),
+            Paragraph::new(Span::styled(label(k, l), Style::new().fg(Color::Black).bg(*col).bold())),
             rect,
         );
         x += w + 1;
     }
     let note = if sharing.is_some() {
         "sharing on the LAN: tell the joiner the url, Esc stops"
+    } else if max > 0 {
+        "↑↓ PgUp PgDn or wheel scroll · y copy · w save · s share"
     } else {
         "buttons or keys: y copy · w save to file · s share on LAN"
     };
@@ -937,13 +959,66 @@ mod invite_tests {
         let mut app = App::new(tx);
         app.mode = Mode::Invite { network: "n".into(), code: "CODE".into(), id: "i".into(), qr: "##\n##".into() };
         let s = screen(&mut app);
-        for want in ["y copy", "w save", "s share on LAN", "Esc close"] {
+        for want in ["y copy", "w save", "s share on LAN", "m select text", "Esc close"] {
             assert!(s.contains(want), "missing {want}");
         }
         let kinds: Vec<_> = app.hits.invite_btns.iter().map(|(_, b)| *b).collect();
-        assert!(kinds == [InviteBtn::Copy, InviteBtn::Save, InviteBtn::Share, InviteBtn::Close]);
+        assert!(kinds == [InviteBtn::Copy, InviteBtn::Save, InviteBtn::Share, InviteBtn::Select, InviteBtn::Close]);
     }
 
+    fn click(app: &mut App, x: u16, y: u16) {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        app.on_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+
+    #[test]
+    fn click_on_the_card_keeps_it_open_click_outside_closes() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(tx);
+        app.mode = Mode::Invite { network: "n".into(), code: "CODE".into(), id: "i".into(), qr: "##\n##".into() };
+        screen(&mut app);
+        let card = app.hits.invite_card.unwrap();
+        click(&mut app, card.x + 3, card.y + 2); // on the code line
+        assert!(matches!(app.mode, Mode::Invite { .. }), "card closed by a click on it");
+        click(&mut app, 0, 0); // outside
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn small_window_scrolls_to_the_last_qr_row() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(tx);
+        let qr: String = (0..30).map(|i| format!("QR{i:02}")).collect::<Vec<_>>().join("\n");
+        app.mode = Mode::Invite { network: "n".into(), code: "CODE".into(), id: "i".into(), qr };
+        let mut t = Terminal::new(TestBackend::new(60, 14)).unwrap();
+        t.draw(|f| draw(f, &mut app)).unwrap();
+        assert!(app.invite_scroll_max.get() > 0, "no scroll offered");
+        let text = |t: &Terminal<TestBackend>| {
+            let b = t.backend().buffer().clone();
+            (0..b.area.height)
+                .map(|y| (0..b.area.width).map(|x| b[(x, y)].symbol().to_string()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(!text(&t).contains("QR29"));
+        for _ in 0..40 {
+            app.on_event(crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Down,
+                crossterm::event::KeyModifiers::NONE,
+            )));
+        }
+        t.draw(|f| draw(f, &mut app)).unwrap();
+        let s = text(&t);
+        assert!(s.contains("QR29"), "last QR row not reachable");
+        assert!(s.contains("copy") || s.contains(" y "), "buttons scrolled away");
+    }
+
+    #[test]
     #[test]
     fn network_picker_lists_networks_and_picks_by_number() {
         use crate::model::{NetSnap, Snapshot};

@@ -40,6 +40,8 @@ pub struct Hits {
     pub invite_btns: Vec<(Rect, InviteBtn)>,
     /// Rows of the network picker, indexed by network position.
     pub pick_rows: Vec<Rect>,
+    /// The invite card, so a click inside it does nothing.
+    pub invite_card: Option<Rect>,
 }
 
 /// A button on the invite overlay. Clicking it does the same as its key.
@@ -48,6 +50,8 @@ pub enum InviteBtn {
     Copy,
     Save,
     Share,
+    /// Turn mouse capture off so the terminal can select the text.
+    Select,
     Close,
 }
 
@@ -151,6 +155,10 @@ pub struct App {
     /// The LAN share of the shown invite (TUI-SERVE-001): invite id, stop
     /// signal, and the URL with its QR once the script printed it.
     pub share: Option<Share>,
+    /// First visible content row of the invite card, and the largest valid
+    /// value (set by the render pass), so a small window can scroll.
+    pub invite_scroll: Cell<u16>,
+    pub invite_scroll_max: Cell<u16>,
 }
 
 pub struct Share {
@@ -181,6 +189,8 @@ impl App {
             peer_scroll: Cell::new(0),
             action_tx,
             share: None,
+            invite_scroll: Cell::new(0),
+            invite_scroll_max: Cell::new(0),
         }
     }
 
@@ -230,6 +240,7 @@ impl App {
             ActionResult::Err(m) => self.set_toast(m, true),
             ActionResult::Invite { network, code, id } => {
                 self.stop_share();
+                self.invite_scroll.set(0);
                 let qr = build_qr(&code);
                 self.mode = Mode::Invite { network, code, id, qr };
             }
@@ -293,7 +304,13 @@ impl App {
                             .iter()
                             .find(|(r, _)| hit(r, m.column, m.row))
                             .map(|(_, b)| *b);
-                        self.invite_button(b.unwrap_or(InviteBtn::Close));
+                        match b {
+                            Some(b) => self.invite_button(b),
+                            // A click on the card itself does nothing (the
+                            // card used to vanish, losing the invite).
+                            None if self.hits.invite_card.is_some_and(|r| hit(&r, m.column, m.row)) => {}
+                            None => self.invite_button(InviteBtn::Close),
+                        }
                     }
                     Mode::PickNet { .. } => {
                         match self.hits.pick_rows.iter().position(|r| hit(r, m.column, m.row)) {
@@ -305,6 +322,8 @@ impl App {
                     _ => {}
                 }
             }
+            MouseEventKind::ScrollDown if matches!(self.mode, Mode::Invite { .. }) => self.scroll_invite(3),
+            MouseEventKind::ScrollUp if matches!(self.mode, Mode::Invite { .. }) => self.scroll_invite(-3),
             MouseEventKind::ScrollDown if self.interactive() => self.move_peer(1),
             MouseEventKind::ScrollUp if self.interactive() => self.move_peer(-1),
             _ => {}
@@ -356,6 +375,12 @@ impl App {
                     KeyCode::Char('y') | KeyCode::Char('c') => self.invite_button(InviteBtn::Copy),
                     KeyCode::Char('w') => self.invite_button(InviteBtn::Save),
                     KeyCode::Char('s') => self.invite_button(InviteBtn::Share),
+                    KeyCode::Char('m') => self.invite_button(InviteBtn::Select),
+                    KeyCode::Down | KeyCode::Char('j') => self.scroll_invite(1),
+                    KeyCode::Up | KeyCode::Char('k') => self.scroll_invite(-1),
+                    KeyCode::PageDown => self.scroll_invite(8),
+                    KeyCode::PageUp => self.scroll_invite(-8),
+                    KeyCode::Home => self.invite_scroll.set(0),
                     KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.invite_button(InviteBtn::Close),
                     _ => {}
                 }
@@ -695,10 +720,11 @@ impl App {
             InviteBtn::Copy => {
                 if let Mode::Invite { code, .. } = &self.mode {
                     let code = code.clone();
-                    self.copy_clipboard(&code);
-                    self.set_toast("invite code copied", false);
+                    let how = self.copy_everywhere(&code);
+                    self.set_toast(format!("invite copied ({how}); nothing pasted? press m, drag to select"), false);
                 }
             }
+            InviteBtn::Select => self.toggle_mouse(),
             InviteBtn::Save => self.save_invite(),
             InviteBtn::Share => self.share_invite(),
             InviteBtn::Close => {
@@ -706,6 +732,40 @@ impl App {
                 self.mode = Mode::Normal;
             }
         }
+    }
+
+    /// Scroll the invite card by `d` rows (small windows).
+    fn scroll_invite(&self, d: i32) {
+        let v = (self.invite_scroll.get() as i32 + d).clamp(0, self.invite_scroll_max.get() as i32);
+        self.invite_scroll.set(v as u16);
+    }
+
+    /// Copy `text` with the terminal (OSC 52) and, when one is installed, a
+    /// system clipboard tool (wl-copy, xclip, xsel). Returns what was used.
+    fn copy_everywhere(&self, text: &str) -> String {
+        self.copy_clipboard(text);
+        let mut used = vec!["terminal"];
+        for (cmd, args) in [
+            ("wl-copy", &[][..]),
+            ("xclip", &["-selection", "clipboard"][..]),
+            ("xsel", &["--clipboard", "--input"][..]),
+        ] {
+            let child = std::process::Command::new(cmd)
+                .args(args)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            if let Ok(mut c) = child {
+                if let Some(mut si) = c.stdin.take() {
+                    let _ = si.write_all(text.as_bytes());
+                }
+                let _ = c.wait();
+                used.push(cmd);
+                break;
+            }
+        }
+        used.join(" + ")
     }
 
     /// Share the shown invite on the LAN with the contrib script
