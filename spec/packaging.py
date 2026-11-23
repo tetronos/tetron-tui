@@ -55,3 +55,17 @@ class DebMaintainerFromVariable(Requirement):
     requires a maintainer), so a package is never published with an invented
     identity.
     """
+
+
+class BumpProtoWorkflow(Requirement):
+    """REQUIREMENT-ID: DEB-009
+
+    `.github/workflows/bump-proto.yml` runs on the `repository_dispatch`
+    event `tetron-release` (sent by tetron core's release workflow with the
+    tag) and on manual dispatch with a tag: `contrib/bump-proto.sh` moves the
+    `tetron-proto` tag, then `contrib/check-suite-deps.sh`, `cargo test` and
+    `cargo clippy --all-targets` run, and a pull request is opened with the
+    change and the result. It never merges and never pushes to main; a tag
+    of another minor is marked in the pull request for review. The release
+    workflow runs `contrib/check-suite-deps.sh` before it builds.
+    """
