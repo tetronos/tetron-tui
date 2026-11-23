@@ -65,7 +65,9 @@ class BumpProtoWorkflow(Requirement):
     tag) and on manual dispatch with a tag: `contrib/bump-proto.sh` moves the
     `tetron-proto` tag, then `contrib/check-suite-deps.sh`, `cargo test` and
     `cargo clippy --all-targets` run, and a pull request is opened with the
-    change and the result. It never merges and never pushes to main; a tag
-    of another minor is marked in the pull request for review. The release
-    workflow runs `contrib/check-suite-deps.sh` before it builds.
+    change and the result. When the tag has tetron-tui's minor and every
+    check passed, the pull request merges itself (rebase and merge); a tag
+    of another minor, or any failure, leaves it open for review. It never
+    pushes to main directly. The release workflow runs
+    `contrib/check-suite-deps.sh` before it builds.
     """
