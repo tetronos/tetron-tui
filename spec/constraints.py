@@ -34,3 +34,16 @@ class RawAssetsUnchanged(Constraint):
     """
     constraint_id = "CON-D03"
     enforcement_logic = "{{ workflow.raw_assets }}"
+
+
+class SuiteGitDepsPinned(Constraint):
+    """CONSTRAINT-ID: CON-D04
+
+    Every git dependency in `Cargo.toml` on a `github.com/tetronos/`
+    repository names a release tag, and the `tetron-proto` tag has the same
+    minor as tetron-tui's own version. Checked by
+    `contrib/check-suite-deps.sh`, the same script in every suite client.
+    ENFORCEMENT (reconcile.py): suite_deps.ok is true.
+    """
+    constraint_id = "CON-D04"
+    enforcement_logic = "{{ suite_deps.ok }}"
