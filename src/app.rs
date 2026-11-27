@@ -44,6 +44,8 @@ pub struct Hits {
     pub invite_card: Option<Rect>,
     /// Action buttons on the Admin tab (TUI-ADMIN-BTN-001).
     pub admin_btns: Vec<(Rect, AdminBtn)>,
+    /// Confirm dialog yes button (TUI-CONFIRM-BTN-001). Any other click cancels.
+    pub confirm_yes: Option<Rect>,
 }
 
 /// An action button on the Admin tab. Clicking it does the same as its key.
@@ -329,6 +331,11 @@ impl App {
                             None => self.mode = Mode::Normal,
                         }
                     }
+                    // Cancel by default: only the yes button confirms.
+                    Mode::Confirm { .. } => {
+                        let yes = self.hits.confirm_yes.is_some_and(|r| hit(&r, m.column, m.row));
+                        self.confirm(yes);
+                    }
                     Mode::Normal => self.on_click(m.column, m.row),
                     _ => {}
                 }
@@ -427,13 +434,7 @@ impl App {
                 return;
             }
             Mode::Confirm { .. } => {
-                let yes = matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y'));
-                if let Mode::Confirm { action, .. } = std::mem::replace(&mut self.mode, Mode::Normal) {
-                    if yes {
-                        self.act(action);
-                        self.set_toast("working…", false);
-                    }
-                }
+                self.confirm(matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y')));
                 return;
             }
             Mode::Normal => {}
@@ -590,6 +591,16 @@ impl App {
             prompt: format!("Grant the {network} admin key to {who}? (makes it a co-coordinator)"),
             action: Action::AdminAdd { network, peer },
         };
+    }
+
+    /// Close the confirm dialog; run its action only on `yes`.
+    fn confirm(&mut self, yes: bool) {
+        if let Mode::Confirm { action, .. } = std::mem::replace(&mut self.mode, Mode::Normal) {
+            if yes {
+                self.act(action);
+                self.set_toast("working…", false);
+            }
+        }
     }
 
     /// Kick the selected peer from the network (admins only).
