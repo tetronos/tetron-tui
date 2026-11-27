@@ -15,3 +15,14 @@ class AdminActionButtons(Req):
     node does not hold the network key; a click then shows "admins only".
     Only a network key holder (coordinator) can kick; the daemon enforces it.
     """
+
+
+class ConfirmButtons(Req):
+    """REQUIREMENT-ID: TUI-CONFIRM-BTN-001
+
+    Every confirm dialog has two clickable buttons: a red yes button named
+    after the action ("y kick", "y nuke", "y leave", "y grant admin",
+    "y stop daemon", "y fetch") and "n cancel". Cancel is the default: only
+    a click on the yes button or the y key runs the action; any other click
+    or key closes the dialog without acting.
+    """

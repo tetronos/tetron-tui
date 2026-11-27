@@ -48,7 +48,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             draw_invite(f, network, code, id, qr, app, &mut hits)
         }
         Mode::PickNet { sel } => draw_pick_net(f, app, *sel, &mut hits),
-        Mode::Confirm { prompt, .. } => draw_confirm(f, prompt),
+        Mode::Confirm { prompt, action } => draw_confirm(f, prompt, action.verb(), &mut hits),
         Mode::Normal => {
             if app.show_help {
                 draw_help(f);
@@ -707,21 +707,13 @@ fn draw_pick_net(f: &mut Frame, app: &App, sel: usize, hits: &mut Hits) {
     );
 }
 
-fn draw_confirm(f: &mut Frame, prompt: &str) {
+/// Confirm dialog with clickable yes/cancel buttons (TUI-CONFIRM-BTN-001).
+/// The yes button names the action; any click off it cancels.
+fn draw_confirm(f: &mut Frame, prompt: &str, verb: &str, hits: &mut Hits) {
     let w = 60u16.min(f.area().width.saturating_sub(2));
     let area = centered(f.area(), w, 7);
     f.render_widget(Clear, area);
-    let lines = vec![
-        Line::raw(""),
-        Line::styled(prompt.to_string(), Style::new().fg(C_BAD).bold()),
-        Line::raw(""),
-        Line::from(vec![
-            Span::styled("y", Style::new().fg(C_ACCENT).bold()),
-            Span::styled(" yes    ", Style::new().fg(C_DIM)),
-            Span::styled("n/Esc", Style::new().fg(C_ACCENT).bold()),
-            Span::styled(" cancel", Style::new().fg(C_DIM)),
-        ]),
-    ];
+    let lines = vec![Line::raw(""), Line::styled(prompt.to_string(), Style::new().fg(C_BAD).bold())];
     f.render_widget(
         Paragraph::new(lines)
             .alignment(Alignment::Center)
@@ -729,6 +721,17 @@ fn draw_confirm(f: &mut Frame, prompt: &str) {
             .block(Block::default().borders(Borders::ALL).border_style(Style::new().fg(C_BAD))),
         area,
     );
+    let yes = format!(" y {verb} ");
+    let no = " n cancel ".to_string();
+    let (yw, nw) = (yes.chars().count() as u16, no.chars().count() as u16);
+    let gap = 4u16;
+    let row = area.y + area.height.saturating_sub(2);
+    let x0 = area.x + area.width.saturating_sub(yw + gap + nw) / 2;
+    let yr = Rect { x: x0, y: row, width: yw, height: 1 };
+    let nr = Rect { x: x0 + yw + gap, y: row, width: nw, height: 1 };
+    hits.confirm_yes = Some(yr);
+    f.render_widget(Paragraph::new(Span::styled(yes, Style::new().fg(Color::Black).bg(C_BAD).bold())), yr);
+    f.render_widget(Paragraph::new(Span::styled(no, Style::new().fg(Color::Black).bg(C_DIM).bold())), nr);
 }
 
 fn draw_admin(f: &mut Frame, area: Rect, net: &NetSnap, app: &App, hits: &mut Hits) {
@@ -1087,7 +1090,6 @@ mod invite_tests {
 
     #[test]
     fn admin_kick_button_click_opens_confirm_then_y_kicks() {
-        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(tx);
         let peer = crate::model::PeerSnap { key: "peerkey".into(), hostname: "bob".into(), ..Default::default() };
@@ -1103,7 +1105,18 @@ mod invite_tests {
         assert!(s.lines().nth(r.y as usize).unwrap().contains("kick"));
         click(&mut app, r.x + 1, r.y);
         assert!(matches!(app.mode, Mode::Confirm { .. }), "Kick button did not open the confirm");
-        app.on_event(Event::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)));
+        let s = screen(&mut app);
+        let yr = app.hits.confirm_yes.unwrap();
+        assert!(s.lines().nth(yr.y as usize).unwrap().contains("y kick") && s.contains("n cancel"));
+        // A click off the yes button cancels (cancel by default).
+        click(&mut app, yr.x + yr.width + 6, yr.y);
+        assert!(matches!(app.mode, Mode::Normal), "click off yes did not cancel");
+        assert!(rx.try_recv().is_err(), "cancel sent an action");
+        // Click yes sends the kick.
+        click(&mut app, r.x + 1, r.y);
+        screen(&mut app);
+        click(&mut app, yr.x + 1, yr.y);
+        assert!(matches!(app.mode, Mode::Normal));
         let mut kicked = false;
         while let Ok(a) = rx.try_recv() {
             if let crate::action::Action::Kick { network_key, endpoint_id } = a {

@@ -47,6 +47,22 @@ pub enum Action {
     },
 }
 
+impl Action {
+    /// Short verb for a confirm dialog's yes button (TUI-CONFIRM-BTN-001).
+    pub fn verb(&self) -> &'static str {
+        match self {
+            Action::Kick { .. } => "kick",
+            Action::Nuke { second: Some(_), .. } => "second nuke",
+            Action::Nuke { .. } => "nuke",
+            Action::Leave { .. } => "leave",
+            Action::AdminAdd { .. } => "grant admin",
+            Action::Shutdown => "stop daemon",
+            Action::JoinUrl { .. } => "fetch",
+            _ => "yes",
+        }
+    }
+}
+
 /// The outcome of an [`Action`], reported back to the UI.
 #[derive(Clone)]
 pub enum ActionResult {
