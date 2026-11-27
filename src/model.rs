@@ -54,6 +54,7 @@ impl NetSnap {
 }
 
 #[derive(Clone)]
+#[cfg_attr(test, derive(Default))]
 pub struct PeerSnap {
     /// Stable identity, used as the history-map key.
     pub key: String,

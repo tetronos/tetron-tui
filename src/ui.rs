@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Sparkline, T
 use std::time::{SystemTime, UNIX_EPOCH};
 use tetron_proto::ipc::{ConnType, ViaDetail};
 
-use crate::app::{App, Btn, Hits, InviteBtn, InputKind, Mode, Tab};
+use crate::app::{AdminBtn, App, Btn, Hits, InviteBtn, InputKind, Mode, Tab};
 use crate::model::{NetSnap, PeerSnap};
 
 const C_DIM: Color = Color::DarkGray;
@@ -201,7 +201,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
         }
         Tab::Admin => {
             let rest = below_sel_peer(f, rows[2], app);
-            draw_admin(f, rest, net, app)
+            draw_admin(f, rest, net, app, hits)
         }
     }
 }
@@ -731,7 +731,7 @@ fn draw_confirm(f: &mut Frame, prompt: &str) {
     );
 }
 
-fn draw_admin(f: &mut Frame, area: Rect, net: &NetSnap, app: &App) {
+fn draw_admin(f: &mut Frame, area: Rect, net: &NetSnap, app: &App, hits: &mut Hits) {
     let mut lines = Vec::new();
     let role_col = if net.is_admin() { C_OK } else { C_DIM };
     lines.push(Line::from(vec![
@@ -774,16 +774,32 @@ fn draw_admin(f: &mut Frame, area: Rect, net: &NetSnap, app: &App) {
         _ => lines.push(Line::styled("  loading…", Style::new().fg(C_DIM))),
     }
 
-    // Action legend.
+    // Action buttons, clickable (TUI-ADMIN-BTN-001). Gated ones are dimmed
+    // for a non-admin; a click still runs the action, which says why not.
     lines.push(Line::raw(""));
     let gate = if net.is_admin() { "" } else { "  (admins only, except Leave)" };
-    lines.push(Line::styled(format!("actions{gate}"), Style::new().fg(C_DIM).bold()));
-    lines.push(Line::styled("  a grant-admin to selected peer", Style::new().fg(C_DIM)));
-    lines.push(Line::styled("  K kick selected peer", Style::new().fg(C_DIM)));
-    lines.push(Line::styled("  X nuke / second proposal", Style::new().fg(C_DIM)));
-    lines.push(Line::styled("  L leave this network", Style::new().fg(C_DIM)));
+    lines.push(Line::styled(format!("actions{gate}  (click or key)"), Style::new().fg(C_DIM).bold()));
+    let info_h = (lines.len() as u16).min(area.height);
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), Rect { height: info_h, ..area });
 
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+    let btns: [(&str, &str, AdminBtn, Color, bool); 4] = [
+        ("a", "grant admin to selected peer", AdminBtn::Grant, C_ACCENT, true),
+        ("K", "kick selected peer", AdminBtn::Kick, C_WARN, true),
+        ("X", "nuke / second proposal", AdminBtn::Nuke, C_BAD, true),
+        ("L", "leave this network", AdminBtn::Leave, C_ACCENT, false),
+    ];
+    for (i, (k, l, b, col, gated)) in btns.iter().enumerate() {
+        let y = area.y + info_h + i as u16;
+        if y >= area.bottom() {
+            break;
+        }
+        let text = format!(" {k} {l} ");
+        let w = (text.chars().count() as u16).min(area.width.saturating_sub(2));
+        let rect = Rect { x: area.x + 2, y, width: w, height: 1 };
+        let bg = if *gated && !net.is_admin() { C_DIM } else { *col };
+        hits.admin_btns.push((rect, *b));
+        f.render_widget(Paragraph::new(Span::styled(text, Style::new().fg(Color::Black).bg(bg).bold())), rect);
+    }
 }
 
 // --- small helpers ---------------------------------------------------------
@@ -1067,5 +1083,41 @@ mod invite_tests {
         for (r, _) in &app.hits.invite_btns {
             assert!(rows[r.y as usize].contains("copy") || rows[r.y as usize].contains("close"));
         }
+    }
+
+    #[test]
+    fn admin_kick_button_click_opens_confirm_then_y_kicks() {
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(tx);
+        let peer = crate::model::PeerSnap { key: "peerkey".into(), hostname: "bob".into(), ..Default::default() };
+        let mut net = NetSnap { name: "alpha".into(), role: "admin".into(), network_key: Some("nk".into()), ..Default::default() };
+        net.peers = vec![peer];
+        app.snapshot = Some(crate::model::Snapshot { networks: vec![net], ..Default::default() });
+        app.tab = crate::app::Tab::Admin;
+        let s = screen(&mut app);
+        assert!(s.contains("K kick selected peer"));
+        let kinds: Vec<_> = app.hits.admin_btns.iter().map(|(_, b)| *b).collect();
+        assert!(kinds == [AdminBtn::Grant, AdminBtn::Kick, AdminBtn::Nuke, AdminBtn::Leave]);
+        let r = app.hits.admin_btns.iter().find(|(_, b)| *b == AdminBtn::Kick).unwrap().0;
+        assert!(s.lines().nth(r.y as usize).unwrap().contains("kick"));
+        click(&mut app, r.x + 1, r.y);
+        assert!(matches!(app.mode, Mode::Confirm { .. }), "Kick button did not open the confirm");
+        app.on_event(Event::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)));
+        let mut kicked = false;
+        while let Ok(a) = rx.try_recv() {
+            if let crate::action::Action::Kick { network_key, endpoint_id } = a {
+                kicked = network_key == "nk" && endpoint_id == "peerkey";
+            }
+        }
+        assert!(kicked, "confirm did not send Kick");
+        // A non-admin gets the toast, no confirm.
+        app.mode = Mode::Normal;
+        app.snapshot.as_mut().unwrap().networks[0].role = "member".into();
+        screen(&mut app);
+        let r = app.hits.admin_btns.iter().find(|(_, b)| *b == AdminBtn::Kick).unwrap().0;
+        click(&mut app, r.x + 1, r.y);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("admins only")));
     }
 }
