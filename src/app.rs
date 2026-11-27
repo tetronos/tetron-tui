@@ -42,6 +42,17 @@ pub struct Hits {
     pub pick_rows: Vec<Rect>,
     /// The invite card, so a click inside it does nothing.
     pub invite_card: Option<Rect>,
+    /// Action buttons on the Admin tab (TUI-ADMIN-BTN-001).
+    pub admin_btns: Vec<(Rect, AdminBtn)>,
+}
+
+/// An action button on the Admin tab. Clicking it does the same as its key.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AdminBtn {
+    Grant,
+    Kick,
+    Nuke,
+    Leave,
 }
 
 /// A button on the invite overlay. Clicking it does the same as its key.
@@ -337,6 +348,16 @@ impl App {
         let btn = self.hits.buttons.iter().find(|(r, _)| hit(r, col, row)).map(|(_, b)| *b);
         if let Some(b) = btn {
             self.do_button(b);
+            return;
+        }
+        let adm = self.hits.admin_btns.iter().find(|(r, _)| hit(r, col, row)).map(|(_, b)| *b);
+        if let Some(b) = adm {
+            match b {
+                AdminBtn::Grant => self.admin_add_sel(),
+                AdminBtn::Kick => self.kick_sel(),
+                AdminBtn::Nuke => self.nuke_sel(),
+                AdminBtn::Leave => self.leave_sel(),
+            }
             return;
         }
         let tab = self.hits.tabs.iter().find(|(r, _)| hit(r, col, row)).map(|(_, t)| *t);
